@@ -1,0 +1,31 @@
+{
+  "node": 8,
+  "vehicle": 80,
+  "max_queue": 50,
+  "poisson_param": 5,
+  "operation_cost": 0.1,
+  "waiting_penalty": 0.2,
+  "overflow": 10,
+  "poisson_cap": 15,
+  "reward_factor": 10,
+
+  "multi_agent": true,
+  "imitate": false,
+  "average_reward": false,
+  "average_queue": 30,
+  "average_reset": false,
+  "include_edge": false,
+  "mini_node_layer": 1,
+  "custom_edge": false,
+
+"edge_lengths": [
+        0,1,2,3,1,2,3,4,
+        1,0,1,2,2,1,2,3,
+        2,1,0,1,3,2,1,2,
+        3,2,1,0,4,3,2,1,
+        1,2,3,4,0,1,2,3,
+        2,1,2,3,1,0,1,2,
+        3,2,1,2,2,1,0,1,
+        4,3,2,1,3,2,1,0
+      ]
+}
