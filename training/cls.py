@@ -39,7 +39,7 @@ if __name__ == "__main__":
 
     num_cpu = 8  # Number of processes to use
     # Create the vectorized environment
-    env = DummyVecEnv([make_env("symmetric-v1", i) for i in range(num_cpu)])
+    env = DummyVecEnv([make_env("route-v1", i) for i in range(num_cpu)])
 
     # Stable Baselines provides you with make_vec_env() helper
     # which does exactly the previous steps for you.
@@ -59,7 +59,7 @@ if __name__ == "__main__":
     # model.set_env(env)
 
     nid = "single-agent"
-    dire = f"./data/n8v80/lrm{lrate}/"
+    dire = f"./data/n8v80sk0/128x2-lrm{lrate}/"
 
     debug_info = ["reward", "queue", "price", "gain", "operating_cost", "wait_penalty", "overflow", "imitation_reward"]
 
