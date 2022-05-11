@@ -10,14 +10,14 @@
   "reward_factor": 1,
 
   "multi_agent": false,
-  "imitate": false,
+  "imitate": true,
   "average_reward": false,
   "average_queue": 30,
   "average_reset": false,
   "include_edge": false,
   "mini_node_layer": 1,
   "custom_edge": false,
-  "skip_second_gradient": false,
+  "skip_second_gradient": true,
   "generate_skew": true,
   "custom_skew": 1,
 

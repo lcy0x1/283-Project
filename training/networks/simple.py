@@ -1,4 +1,4 @@
-from typing import Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Callable, Dict, List, Optional, Tuple, Type, Union, TypeVar
 
 import gym
 import torch as th
@@ -6,6 +6,8 @@ from torch import nn
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.policies import ActorCriticPolicy
+
+T = TypeVar('T', bound='Module')
 
 
 class SimpleNetwork(nn.Module):
@@ -19,10 +21,10 @@ class SimpleNetwork(nn.Module):
     """
 
     def __init__(
-        self,
-        feature_dim: int,
-        last_layer_dim_pi: int = 128,
-        last_layer_dim_vf: int = 128,
+            self,
+            feature_dim: int,
+            last_layer_dim_pi: int = 128,
+            last_layer_dim_vf: int = 128,
     ):
         super(SimpleNetwork, self).__init__()
 
@@ -55,19 +57,22 @@ class SimpleNetwork(nn.Module):
     def forward_critic(self, features: th.Tensor) -> th.Tensor:
         return self.value_net(features)
 
+    def apply(self, fn):
+        print(fn)
+        super(SimpleNetwork, self).apply(fn)
+
 
 class SimpleACP(ActorCriticPolicy):
     def __init__(
-        self,
-        observation_space: gym.spaces.Space,
-        action_space: gym.spaces.Space,
-        lr_schedule: Callable[[float], float],
-        net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
-        activation_fn: Type[nn.Module] = nn.Tanh,
-        *args,
-        **kwargs,
+            self,
+            observation_space: gym.spaces.Space,
+            action_space: gym.spaces.Space,
+            lr_schedule: Callable[[float], float],
+            net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
+            activation_fn: Type[nn.Module] = nn.Tanh,
+            *args,
+            **kwargs,
     ):
-
         super(SimpleACP, self).__init__(
             observation_space,
             action_space,

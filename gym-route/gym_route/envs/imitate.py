@@ -66,9 +66,6 @@ class Imitated:
             intentions = np.sum(future_gradient[i]) * self.data_factor
             factor = 1
             remain = future_vehicle[i] - intentions
-            if intentions > future_vehicle[i]:
-                factor = future_vehicle[i] / intentions
-                remain = 0
             no_remain = remain / (self.env.node - 1)
             for j in range(self.env.node):
                 intention = future_gradient[i][j] * self.data_factor * factor + no_remain - future_queue[i][j]
@@ -123,7 +120,7 @@ class Imitated:
         ans = [[0 for _ in range(self.env.node)] for _ in range(self.env.node)]
         for i in range(self.env.node):
             for j in range(self.env.node):
-                ans[i][j] = gradient[i][j] - motion[i][j]
+                ans[i][j] = max(0, gradient[i][j] - motion[i][j])
         return ans
 
     def compute_best_price(self, intention):

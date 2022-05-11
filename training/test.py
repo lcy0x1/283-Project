@@ -14,6 +14,7 @@ from stable_baselines3.common.utils import set_random_seed
 import gym_route
 from torch import nn
 
+from training.networks.imitate import ImitateACP
 from training.networks.simple import SimpleACP
 
 
@@ -36,13 +37,13 @@ if __name__ == "__main__":
 
     num_cpu = 8  # Number of processes to use
     # Create the vectorized environment
-    env = DummyVecEnv([make_env("symmetric-v0", i) for i in range(num_cpu)])
+    env = DummyVecEnv([make_env("route-v1", i) for i in range(num_cpu)])
 
     # Stable Baselines provides you with make_vec_env() helper
     # which does exactly the previous steps for you.
     # You can choose between `DummyVecEnv` (usually faster) and `SubprocVecEnv`
     # env = make_vec_env(env_id, n_envs=num_cpu, seed=0, vec_env_cls=SubprocVecEnv)
-    model = PPO(SimpleACP, env, verbose=0,
+    model = PPO(ImitateACP, env, verbose=0,
                 gamma=0.99 ** (1 / eval_k), gae_lambda=0.95 ** (1 / eval_k),
                 n_steps=256 * eval_k, learning_rate=lrate * 1e-6)
 
@@ -54,7 +55,7 @@ if __name__ == "__main__":
     debug_info = ["reward", "queue", "price", "gain", "operating_cost", "wait_penalty", "overflow", "imitation_reward"]
 
     for i in range(mil_steps):
-        model.learn(total_timesteps=1_0_000)
+        # model.learn(total_timesteps=1_0_000)
         accu = 0
 
         lists = {key: [] for key in debug_info}
@@ -65,7 +66,7 @@ if __name__ == "__main__":
             obs = env.reset()
             for _ in range(eval_m * eval_k):
                 j += 1
-                action, _states = model.predict(obs)
+                action, _states = model.predict(obs, deterministic=True)
                 obs, rewards, dones, info = env.step(action)
                 if j % eval_k == 0:
                     for k in debug_info:

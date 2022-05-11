@@ -207,7 +207,8 @@ class VehicleEnv(gym.Env):
             return self.to_observation(), 0, False, {}
         else:
             for i in range(self.node):
-                self.action_cache[i] = VehicleAction(self, i, act[i * self.node * 2:(i + 1) * self.node * 2])
+                acti = act[i * self.node * 2:(i + 1) * self.node * 2]
+                self.action_cache[i] = VehicleAction(self, i, acti)
             reward, info = self.cycle_proceed()
             return self.to_observation(), reward, False, info
 

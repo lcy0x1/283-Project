@@ -1,144 +1,323 @@
+from typing import Callable, Dict, List, Optional, Tuple, Type, Union
+
+import gym
+import numpy as np
 import torch as th
+from stable_baselines3.common.type_aliases import Schedule
 from torch import nn
 
+from stable_baselines3 import PPO
+from stable_baselines3.common.policies import ActorCriticPolicy
 
-class DataHolder(object):
+from gym_route.envs.env import VehicleEnv
 
-    def __init__(self, x: th.Tensor):
-        self.n = 8
-        self.mini = 1
-
-        x = th.swapaxes(x, 0, 1)
-        self.vehicles = th.tensor([x[i] for i in range(self.n)])
-        self.mini = th.tensor([x[i + self.n] for i in range(self.n)])
-        self.queue = th.tensor([[x[i * self.n + j + self.n * 2] for j in range(self.n)] for i in range(self.n)])
+dummy_env = VehicleEnv()
 
 
-class Imitated(nn.Module):
+class Debugger(object):
 
     def __init__(self):
-        super(Imitated, self).__init__()
-        self.time_factor = nn.Parameter(th.tensor(0.5))
-        self.dist_factor = nn.Parameter(th.tensor(0.3))
-        self.queue_factor = nn.Parameter(th.tensor(0.4))
-        self.queue_intention = nn.Parameter(th.tensor(1))
-        self.distribute_factor = nn.Parameter(th.tensor(0.4))
-        self.price_intention = nn.Parameter(th.tensor(0.25))
-        self.operating_cost = nn.Parameter(th.tensor(0.6))
-        self.data_factor = nn.Parameter(th.tensor(1))
+        self.envs: List[VehicleEnv] = []
+        self.ep = 0
 
-        self.register_parameter("time", self.time_factor)
-        self.register_parameter("dist", self.dist_factor)
-        self.register_parameter("queue", self.queue_factor)
-        self.register_parameter("intention", self.queue_intention)
-        self.register_parameter("distribute", self.distribute_factor)
-        self.register_parameter("price", self.price_intention)
-        self.register_parameter("cost", self.operating_cost)
-        self.register_parameter("data", self.data_factor)
+    def setup(self, x: th.Tensor):
+        ep = x.shape[0]
+        self.ep = ep
+        self.envs = [VehicleEnv() for _ in range(ep)]
+        for i in range(ep):
+            self.setup_index(x[i], i)
 
-    def init(self):
-        nn.init.constant_(self.time_factor.data, 0.5)
-        nn.init.constant_(self.dist_factor.data, 0.3)
-        nn.init.constant_(self.queue_factor.data, 0.4)
-        nn.init.constant_(self.queue_intention.data, 1)
-        nn.init.constant_(self.distribute_factor.data, 0.4)
-        nn.init.constant_(self.price_intention.data, 0.25)
-        nn.init.constant_(self.operating_cost.data, 0.6)
-        nn.init.constant_(self.data_factor.data, 1)
+    def setup_index(self, x: th.Tensor, index: int):
+        env = self.envs[index]
+        for i in range(env.node):
+            env.vehicles[i] = x[i].item()
+        for i in range(env.node):
+            for j in range(env.node):
+                env.queue[i][j] = x[env.node * (1 + env.mini_node_layer + i) + j].item()
 
-    def compute_action(self, x: th.Tensor):
-        data = DataHolder(x)
-        vehicle_gradient = self.compute_gradient(data)
-        # calculate action
-        raw_motion = np.zeros((self.env.node, self.env.node))
-        vehicle_motion = np.zeros((self.env.node, self.env.node))
-        for i in range(self.env.node):
-            if self.env.vehicles[i] == 0:
-                continue
-            intentions = sum(vehicle_gradient[i] * self.data_factor)
-            factor = 1
-            remain = self.env.vehicles[i] - intentions
-            if intentions > self.env.vehicles[i]:
-                factor = self.env.vehicles[i] / intentions
-                remain = 0
 
-            for j in range(self.env.node):
-                raw_motion[i][j] = vehicle_gradient[i][j] * self.data_factor * factor
+class InitParam(object):
 
-            raw_motion[i][i] = remain
+    def __init__(self, env: VehicleEnv = dummy_env):
+        self.time_factor = 0.5
+        self.data_factor = 1
+        self.queue_factor = 0.4
+        self.dist_factor = 0.3
+        self.distribute_factor = 0.2
+        self.queue_intention = 1
+        self.func = nn.init.constant_
+        self.env = env
 
-            sums = sum(raw_motion[i])
+    def init(self, x: th.Tensor, mean: float):
+        self.func(x, mean)
 
-            for j in range(self.env.node):
-                vehicle_motion[i][j] = raw_motion[i][j] / sums
 
-        future_gradient = self.mimic_step(vehicle_gradient, raw_motion)
-        departure = np.sum(raw_motion, 1)
-        arrival = np.sum(raw_motion, 0)
-        future_vehicle = np.array(self.env.vehicles) - departure + arrival
-        future_queue = np.maximum(0, np.array(self.env.queue) - raw_motion)
+class FeatureDivider(nn.Module):
 
-        price = np.zeros((self.env.node, self.env.node))
+    def __init__(self, n: int, mini: int):
+        super(FeatureDivider, self).__init__()
+        self.n = n
+        self.mini = mini
+
+    def group(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+        veh = x[0:self.n]
+        mini = x[self.n:self.n * (1 + self.mini)]
+        queue = [x[self.n * (1 + self.mini + i):self.n * (1 + self.mini + i + 1)].unsqueeze(0) for i in range(self.n)]
+        return veh, mini, th.concat(queue)
+
+    def vehicles(self, index: int, x: th.Tensor) -> th.Tensor:
+        veh = x[[index]]
+        mini = x[[self.n + index * self.n + i for i in range(self.mini)]]
+        return th.concat((veh, mini))
+
+    def requests(self, index: int, x: th.Tensor) -> th.Tensor:
+        return x[[self.n * (1 + self.mini) + index * self.n + i for i in range(self.n)]]
+
+    def arrivals(self, index: int, x: th.Tensor) -> th.Tensor:
+        return x[[self.n * (1 + self.mini) + i * self.n + index for i in range(self.n)]]
+
+    def queue(self, x: th.Tensor, i: int, j: int):
+        return x[self.n * (1 + self.mini) + i * self.n + j]
+
+
+class PotentialNetwork(nn.Module):
+    """
+    This is a linear layer, but with reduced parameters
+    There are 18*8+8*8=208 parameters
+    Could be replaced with a linear layer, which has 640 parameters
+    """
+
+    def __init__(self, node: int, mini: int):
+        super(PotentialNetwork, self).__init__()
+        self.n = node
+        self.mini = mini
+        self.divider = FeatureDivider(node, mini)
+
+        self.p0 = [nn.Linear(1 + mini + node * 2, 1) for _ in range(node)]
+        self.p1 = nn.Linear(node, node)
+        for i in range(node):
+            self.add_module('p0_' + str(i), self.p0[i])
+        self.add_module('p1', self.p1)
+
+    def init(self, param: InitParam):
+        for i in range(self.n):
+            param.init(self.p0[i].weight.data[0][0], 1 / param.data_factor)
+            for j in range(self.mini):
+                param.init(self.p0[i].weight.data[0][1 + j], param.time_factor / param.data_factor)
+            for j in range(self.n):
+                param.init(self.p0[i].weight.data[0][1 + self.mini + j], -1 / param.data_factor)
+            for j in range(self.n):
+                factor = param.queue_factor * param.time_factor ** param.env.edge_matrix[j][i] / param.data_factor
+                param.init(self.p0[i].weight.data[0][1 + self.mini + self.n + j], factor)
+            param.init(self.p0[i].bias.data, 0)
+
+        for i in range(self.n):
+            for j in range(self.n):
+                value = -1 / self.n
+                if i == j:
+                    value += 1
+                param.init(self.p1.weight.data[i, j], value)
+                param.init(self.p1.bias, 0)
+
+    def get_potential(self, x: th.Tensor):
+        l0 = []
+        for i in range(self.n):
+            res = th.concat((self.divider.vehicles(i, x),
+                             self.divider.requests(i, x),
+                             self.divider.arrivals(i, x)))
+            l0.append(self.use_linear(self.p0[i], res))
+        x0 = th.concat(l0)
+        return self.use_linear(self.p1, x0)
+
+    @staticmethod
+    def use_linear(p, x):
+        return th.swapaxes(p.forward(th.swapaxes(x, 0, 1)), 0, 1)
+
+    def apply(self, fn):
+        super(PotentialNetwork, self).apply(fn)
+        self.init(InitParam())
+
+
+class ActionNetwork(nn.Module):
+    """
+    Action:
+    Linear mapping from queue + ReLU mapping from potential difference
+    """
+
+    def __init__(self, node: int, mini: int, debug: bool = True):
+        super(ActionNetwork, self).__init__()
+
+        self.debug = debug
+        self.n = node
+        self.potential = PotentialNetwork(node, mini)
+        self.divider = FeatureDivider(node, mini)
+        self.relu = nn.ReLU()
+
+        self.distribute_param = nn.Parameter(th.empty((node, node)))
+        self.queue_param = nn.Parameter(th.empty((node, node)))
+
+        self.add_module("potential", self.potential)
+        self.register_parameter('distribute_param', self.distribute_param)
+        self.register_parameter('queue_param', self.queue_param)
+
+    def init(self, param: InitParam):
+        for i in range(self.n):
+            for j in range(self.n):
+                value = param.dist_factor ** param.env.edge_matrix[j][i] * param.distribute_factor / self.n
+                param.init(self.distribute_param.data[i, j], value)
+
+        for i in range(self.n):
+            for j in range(self.n):
+                value = param.queue_intention
+                param.init(self.queue_param.data[i, j], value)
+
+    def get_action(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+        potential = self.potential.get_potential(x)
+        gradient = []
         action = []
-        for i in range(self.env.node):
-            intentions = np.sum(future_gradient[i]) * self.data_factor
-            factor = 1
-            remain = future_vehicle[i] - intentions
-            if intentions > future_vehicle[i]:
-                factor = future_vehicle[i] / intentions
-                remain = 0
-            no_remain = remain / (self.env.node - 1)
-            for j in range(self.env.node):
-                intention = future_gradient[i][j] * self.data_factor * factor + no_remain - future_queue[i][j]
-                price[i][j] = self.compute_best_price(intention)
-            action.append(np.concatenate((vehicle_motion[i], price[i])))
+        raw_action = []
+        for i in range(self.n):
+            sub: List[Optional[th.Tensor]] = [None for _ in range(self.n)]
+            remain = x[i]
+            for j in range(self.n):
+                if i == j:
+                    continue
+                diff = potential[i] - potential[j]
+                val_0 = self.relu.forward(diff) * self.distribute_param[i, j]
+                val_1 = self.divider.queue(x, i, j) * self.queue_param[i, j]
+                val: th.Tensor = val_0 + val_1
+                remain = remain - val
+                sub[j] = val.unsqueeze(0)
+            sub[i] = th.zeros(potential[0].shape).unsqueeze(0)
+            grad = th.concat(sub)
+            gradient.append(grad.unsqueeze(0))
+            sub[i] = self.relu.forward(remain).unsqueeze(0)
+            vec = th.concat(sub)
+            action.append((vec / th.sum(vec, 0)).unsqueeze(0))
+            raw_action.append((grad / th.sum(vec, 0)).unsqueeze(0))
+        return th.concat(gradient), th.concat(action), th.concat(raw_action)
 
-        return action
+    # TODO add parameters
+    def get_price(self, x: th.Tensor):
+        vehicle, mini, queue = self.divider.group(x)
+        gradient, action, raw_action = self.get_action(x)
+        raw_action *= vehicle
+        future_gradient = self.relu(gradient - raw_action)
+        departure = th.sum(raw_action, 1)  # TODO parameter
+        arrival = th.sum(raw_action, 0) + th.sum(mini, 1)  # TODO parameter
+        future_vehicle = vehicle - departure + arrival
+        future_queue = th.relu(queue - raw_action)
 
-    def compute_gradient(self, data: DataHolder):
-        vehicle_potential = [0 for _ in range(data.n)]
+        ans = []
+        intentions = th.sum(future_gradient, 1)  # TODO parameter
+        remain = self.relu(future_vehicle - intentions)
+        for i in range(self.n):
+            no_remain = remain[i] / (self.n - 1)
+            price = []
+            for j in range(self.n):
+                intention = future_gradient[i][j] + no_remain - future_queue[i][j]  # TODO parameter
+                price.append((self.relu(1 - self.relu(intention) * 0.25 - 0.6) + 0.6).unsqueeze(0))  # TODO parameter
+            ans.append(th.concat((action[i], th.concat(price))))
+        return th.concat(ans)
 
-        for i in range(data.n):
-            potential = 0
-            potential -= th.sum(data.queue[i], 0) / self.data_factor
-            potential += data.vehicles[i] / self.data_factor
-            potential += data.mini[i] * self.time_factor / self.data_factor
-            vehicle_potential[i] = potential
-
-        # add queue potential
-        for i in range(self.env.node):
-            potential = 0
-            for j in range(self.env.node):
-                availability = queue[j][i] / self.data_factor
-                time_discount = self.time_factor ** self.env.edge_matrix[j][i]
-                potential += availability * self.queue_factor * time_discount
-            vehicle_potential[i] += potential
-
-        # calculate relative potential
-        average_potential = sum(vehicle_potential) / self.env.node
-        vehicle_diff = [0 for _ in range(self.env.node)]
-        for i in range(self.env.node):
-            vehicle_diff[i] = vehicle_potential[i] - average_potential
-
-        # calculate vehicle gradient
-        vehicle_gradient = [[0 for _ in range(self.env.node)] for _ in range(self.env.node)]
-        for i in range(self.env.node):
-            for j in range(self.env.node):
-                diff = (vehicle_potential[i] - vehicle_potential[j]) * self.distribute_factor
-                if diff > 0:
-                    grad = diff * self.dist_factor ** self.env.edge_matrix[i][j] / self.env.node
-                    vehicle_gradient[i][j] += grad
-                vehicle_gradient[i][j] += queue[i][j] * self.queue_intention
-        return vehicle_gradient
-
-    def mimic_step(self, gradient, motion):
-        ans = [[0 for _ in range(self.env.node)] for _ in range(self.env.node)]
-        for i in range(self.env.node):
-            for j in range(self.env.node):
-                ans[i][j] = gradient[i][j] - motion[i][j]
+    def forward(self, x: th.Tensor):
+        ans = th.swapaxes(self.get_price(th.swapaxes(x, 0, 1)), 0, 1)
+        if self.debug:
+            debugger = Debugger()
+            debugger.setup(x)
+            for t in range(debugger.ep):
+                act = debugger.envs[t].imitation.compute_action()
+                for i in range(self.n):
+                    la = []
+                    lb = []
+                    for j in range(self.n * 2):
+                        la.append(ans[t][i * self.n * 2 + j])
+                        lb.append(act[i][j])
+                    la = np.round_(np.array(la), 3)
+                    lb = np.round_(np.array(lb), 3)
+                    # print(f'trial {t} node {i}:')
+                    # print(la)
+                    # print(lb)
+                ans[t] = th.tensor(np.array(act)).flatten()
         return ans
 
-    def compute_best_price(self, intention):
-        if intention < 0:
-            return 1
-        return max(self.operating_cost, 1 - intention * self.price_intention / self.data_factor)
+    def apply(self, fn):
+        super(ActionNetwork, self).apply(fn)
+        self.init(InitParam())
+
+
+class ImitateNetwork(nn.Module):
+    """
+    Custom network for policy and value function.
+    It receives as input the features extracted by the feature extractor.
+
+    :param feature_dim: dimension of the features extracted with the features_extractor (e.g. features from a CNN)
+    :param last_layer_dim_pi: (int) number of units for the last layer of the policy network
+    :param last_layer_dim_vf: (int) number of units for the last layer of the value network
+    """
+
+    def __init__(
+            self,
+            feature_dim: int,
+            last_layer_dim_pi: int = 128,
+            last_layer_dim_vf: int = 128,
+    ):
+        super(ImitateNetwork, self).__init__()
+
+        # IMPORTANT:
+        # Save output dimensions, used to create the distributions
+        self.latent_dim_pi = last_layer_dim_pi
+        self.latent_dim_vf = last_layer_dim_vf
+
+        # Policy network
+        self.policy_net = ActionNetwork(8, 1)
+        # Value network
+        self.value_net = nn.Sequential(
+            nn.Linear(feature_dim, last_layer_dim_vf), nn.ReLU(),
+            nn.Linear(last_layer_dim_vf, last_layer_dim_vf), nn.ReLU()
+        )
+
+    def forward(self, features: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+        """
+        :return: (th.Tensor, th.Tensor) latent_policy, latent_value of the specified network.
+            If all layers are shared, then ``latent_policy == latent_value``
+        """
+        return self.policy_net(features), self.value_net(features)
+
+    def forward_actor(self, features: th.Tensor) -> th.Tensor:
+        return self.policy_net(features)
+
+    def forward_critic(self, features: th.Tensor) -> th.Tensor:
+        return self.value_net(features)
+
+
+class ImitateACP(ActorCriticPolicy):
+    def __init__(
+            self,
+            observation_space: gym.spaces.Space,
+            action_space: gym.spaces.Space,
+            lr_schedule: Callable[[float], float],
+            net_arch: Optional[List[Union[int, Dict[str, List[int]]]]] = None,
+            activation_fn: Type[nn.Module] = nn.Tanh,
+            *args,
+            **kwargs,
+    ):
+        super(ImitateACP, self).__init__(
+            observation_space,
+            action_space,
+            lr_schedule,
+            net_arch,
+            activation_fn,
+            # Pass remaining arguments to base class
+            *args,
+            **kwargs,
+        )
+
+    def _build_mlp_extractor(self) -> None:
+        self.mlp_extractor = ImitateNetwork(self.features_dim)
+
+    def _build(self, lr_schedule: Schedule) -> None:
+        super()._build(lr_schedule)
+        nn.init.constant_(self.action_net.weight.data, 0)
+        for i in range(self.mlp_extractor.latent_dim_pi):
+            nn.init.constant_(self.action_net.weight.data[i, i], 1)
