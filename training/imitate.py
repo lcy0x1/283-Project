@@ -1,11 +1,12 @@
 import math
 import random
-from gym_symmetric.envs.symmetric_env import VehicleEnv, Imitated
+from gym_route.envs.env import VehicleEnv
+from gym_route.envs.imitate import Imitated
 
 env = VehicleEnv()
 env.reset()
 env.seed(random.randint(0, 1000000))
-imitate = Imitated(env)
+imitate = Imitated(env, VehicleEnv(imitate=False))
 
 n = 300
 cumulative_reward = 0

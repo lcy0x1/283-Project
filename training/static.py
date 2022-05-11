@@ -2,7 +2,8 @@ import math
 import random
 import csv
 
-from gym_symmetric.envs.symmetric_env import VehicleEnv, Imitated
+from gym_route.envs.env import VehicleEnv
+from gym_route.envs.imitate import Imitated
 
 if __name__ == "__main__":
     env = VehicleEnv()

@@ -17,6 +17,9 @@
   "include_edge": false,
   "mini_node_layer": 1,
   "custom_edge": false,
+  "skip_second_gradient": false,
+  "generate_skew": true,
+  "custom_skew": 1,
 
 "edge_lengths": [
         0,1,2,3,1,2,3,4,

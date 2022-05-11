@@ -7,7 +7,9 @@ from gym import spaces
 from gym.utils import seeding
 import json
 import sys
+import numpy as np
 
+from gym_route.envs.imitate import Imitated
 from numpy.random.mtrand import RandomState
 
 
@@ -96,6 +98,7 @@ class VehicleEnv(gym.Env):
         self.multi_agent = self.config["multi_agent"]
         self.imitate = imitate and self.config["imitate"]
         self.reward_factor = self.config["reward_factor"]
+        self.skip_second_gradient = self.config["skip_second_gradient"]
 
         self.vehicles = [0 for _ in range(self.node)]
         self.queue = [[0 for _ in range(self.node)] for _ in range(self.node)]
@@ -108,6 +111,8 @@ class VehicleEnv(gym.Env):
         self.price_factor = [[0 for _ in range(self.node)] for _ in range(self.node)]
         self.bounds = [0 for _ in range(self.node)]
         self.custom_edge = self.config["custom_edge"]
+        self.generate_skew = self.config["generate_skew"]
+        self.custom_skew = self.config["custom_skew"]
         self.edge_list = self.config["edge_lengths"]
         if self.custom_edge:
             self.demand_list = self.config["demand_factor"]
@@ -123,19 +128,19 @@ class VehicleEnv(gym.Env):
         self.random: Optional[RandomState] = None
 
         if self.multi_agent:
-            self.observation_space = spaces.MultiDiscrete(
+            self.observation_space = spaces.Box(0, np.array(
                 [self.vehicle + 1 for _ in range(self.node)] +  # vehicles
                 [self.vehicle + 1 for _ in range(self.node * self.mini_node_layer)] +  # vehicles
                 [self.queue_size + 1 for _ in range(self.node)] +  # queue
                 [self.queue_size * (self.node - 1) + 1 for _ in range(self.node)] +  # queue at other nodes
                 ([self.max_edge + 1 for _ in range(self.node)] if self.include_edge else []) +
-                [self.node])  # state
+                [self.node]))  # state
             self.action_space = spaces.Box(0, 1, (self.node * 2,))
         else:
-            self.observation_space = spaces.MultiDiscrete(
+            self.observation_space = spaces.Box(0, np.array(
                 [self.vehicle + 1 for _ in range(self.node)] +  # vehicles
                 [self.vehicle + 1 for _ in range(self.node * self.mini_node_layer)] +  # mininode
-                [self.queue_size + 1 for _ in range(self.node * (self.node - 1))])  # queue
+                [self.queue_size + 1 for _ in range(self.node ** 2)]))  # queue
             self.action_space = spaces.Box(0, 1, (self.node ** 2 * 2,))
 
         # Stores number of vehicles at mini node between i and j
@@ -148,7 +153,7 @@ class VehicleEnv(gym.Env):
         self.seed(seed)
 
         if self.imitate:
-            self.imitation = Imitated(self)
+            self.imitation = Imitated(self, VehicleEnv(config, imitate=False))
 
     def seed(self, seed=None):
         self.random, _ = seeding.np_random(seed)
@@ -181,10 +186,17 @@ class VehicleEnv(gym.Env):
         for i in range(self.node):
             for j in range(self.node):
                 self.edge_matrix[i][j] = self.edge_list[tmp]
+                self.bounds[j] = max(self.bounds[j], self.edge_matrix[i][j])
                 self.price_factor[i][j] = self.edge_list[tmp]
                 self.demand_factor[i][j] = -self.edge_list[tmp] ** 2
-                self.bounds[j] = max(self.bounds[j], self.edge_matrix[i][j])
                 tmp += 1
+
+                if self.generate_skew:
+                    if i > j:
+                        factor = self.custom_skew
+                    else:
+                        factor = 1 / self.custom_skew
+                    self.demand_factor[i][j] *= factor
 
     def step(self, act):
         if self.multi_agent:
@@ -355,7 +367,7 @@ class VehicleEnv(gym.Env):
             arr[ind] = self.current_index
             return arr
         else:
-            arr = [0 for _ in range(self.node * (self.node + self.mini_node_layer))]
+            arr = [0 for _ in range(self.node * (self.node + 1 + self.mini_node_layer))]
             ind = 0
             for i in range(self.node):
                 arr[ind] = self.vehicles[i]
@@ -370,135 +382,6 @@ class VehicleEnv(gym.Env):
                     ind += 1
             for i in range(self.node):
                 for j in range(self.node):
-                    if i == j:
-                        continue
                     arr[ind] = self.queue[i][j]
                     ind += 1
             return arr
-
-
-class Imitated:
-
-    def __init__(self, env: VehicleEnv):
-        self.env = env
-        self.dummy = VehicleEnv(env.config, imitate=False)
-
-        self.time_factor = 0.5
-        self.dist_factor = 0.3
-        self.queue_factor = 0.4
-        self.queue_intention = 1
-        self.distribute_factor = 0.3
-        self.price_intention = 0.2
-
-        self.operating_cost = 0.6
-        self.data_factor = 1
-
-    def compute_action(self):
-        vehicle_gradient = self.compute_gradient(self.env.vehicles, self.env.mini_vehicles, self.env.queue)
-        # calculate action
-        vehicle_motion = [[0 for _ in range(self.env.node)] for _ in range(self.env.node)]
-        for i in range(self.env.node):
-            if self.env.vehicles[i] == 0:
-                continue
-            intentions = 0
-            for j in range(self.env.node):
-                intentions += vehicle_gradient[i][j] * self.data_factor
-            factor = 1
-            remain = self.env.vehicles[i] - intentions
-            if intentions > self.env.vehicles[i]:
-                factor = self.env.vehicles[i] / intentions
-                remain = 0
-
-            for j in range(self.env.node):
-                vehicle_motion[i][j] = vehicle_gradient[i][j] * self.data_factor * factor
-
-            vehicle_motion[i][i] = remain
-
-            sums = sum(vehicle_motion[i])
-
-            for j in range(self.env.node):
-                vehicle_motion[i][j] /= sums
-
-        # imitate
-        self.dummy.copy_from(self.env)
-        for i in range(self.env.node):
-            action = vehicle_motion[i].copy()
-            action.extend([1 for _ in range(self.env.node)])
-            self.dummy.node_step(action)
-        self.dummy.cycle_proceed()
-
-        # calculate price
-        future_gradient = self.compute_gradient(self.dummy.vehicles, self.dummy.mini_vehicles, self.dummy.queue)
-        price = [[0 for _ in range(self.env.node)] for _ in range(self.env.node)]
-
-        action = []
-        for i in range(self.env.node):
-            intentions = 0
-            for j in range(self.env.node):
-                intentions += future_gradient[i][j] * self.data_factor
-            factor = 1
-            remain = self.dummy.vehicles[i] - intentions
-            if intentions > self.dummy.vehicles[i]:
-                factor = self.dummy.vehicles[i] / intentions
-                remain = 0
-            no_remain = remain / (self.env.node - 1)
-            for j in range(self.env.node):
-                intention = future_gradient[i][j] * self.data_factor * factor + no_remain - self.dummy.queue[i][j]
-                price[i][j] = self.compute_best_price(intention)
-            single_action = vehicle_motion[i].copy()
-            single_action.extend(price[i])
-            action.append(single_action)
-
-        return action
-
-    def compute_gradient(self, vehicles, mini_vehicles, queue):
-
-        vehicle_potential = [0 for _ in range(self.env.node)]
-        # compute vehicle availability
-        # currently available vehicles - current queue +
-        # upcoming vehicle * time factor ^ distance +
-        # vehicle availability * queue ratio * queue_factor * time factor ^ distance
-        for i in range(self.env.node):
-            potential = 0
-            potential -= sum(queue[i]) / self.data_factor
-            potential += vehicles[i] / self.data_factor
-            for j in range(self.env.node):
-                for k in range(self.env.edge_matrix[j][i] - 1):
-                    potential += mini_vehicles[j][i][k] * self.time_factor ** k / self.data_factor
-            vehicle_potential[i] = potential
-
-        # calculate relative potential
-        average_potential = sum(vehicle_potential) / self.env.node
-        vehicle_diff = [0 for _ in range(self.env.node)]
-        for i in range(self.env.node):
-            vehicle_diff[i] = vehicle_potential[i] - average_potential
-
-        # add queue potential
-        for i in range(self.env.node):
-            potential = 0
-            for j in range(self.env.node):
-                availability = max(0, min(vehicle_diff[j], queue[j][i] / self.data_factor))
-                queue_ratio = 0 if queue[j][i] == 0 else queue[j][i] / sum(queue[j])
-                time_discount = self.time_factor ** self.env.edge_matrix[j][i]
-                potential += availability * queue_ratio * self.queue_factor * time_discount
-            vehicle_potential[i] += potential
-
-        # calculate vehicle gradient
-        vehicle_gradient = [[0 for _ in range(self.env.node)] for _ in range(self.env.node)]
-        for i in range(self.env.node):
-            for j in range(self.env.node):
-                diff = (vehicle_potential[i] - vehicle_potential[j]) * self.distribute_factor
-                if diff > 0:
-                    grad = diff * self.dist_factor ** self.env.edge_matrix[i][j] / self.env.node
-                    vehicle_gradient[i][j] += grad
-                if diff < 0:
-                    grad = diff * self.dist_factor ** self.env.edge_matrix[j][i] / self.env.node
-                    vehicle_gradient[j][i] += grad
-                vehicle_gradient[i][j] += queue[i][j] * self.queue_intention
-
-        return vehicle_gradient
-
-    def compute_best_price(self, intention):
-        if intention < 0:
-            return 1
-        return max(self.operating_cost, 1 - intention * self.price_intention / self.data_factor)

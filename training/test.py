@@ -14,14 +14,13 @@ from stable_baselines3.common.utils import set_random_seed
 import gym_route
 from torch import nn
 
+from training.networks.simple import SimpleACP
+
 
 def make_env(env_id, rank, seed=0):
     def _init():
         env = gym.make(env_id)
         env.seed(seed + rank)
-        print("initial state: ", env.reset())
-        print("Observation Space: ", env.observation_space)
-        print("Action Space: ", env.action_space)
         return env
 
     set_random_seed(seed)
@@ -29,43 +28,33 @@ def make_env(env_id, rank, seed=0):
 
 
 if __name__ == "__main__":
-    layer_n = int(sys.argv[1])
-    layer_l = int(sys.argv[2])
-    mil_steps = int(sys.argv[3])
-    eval_n = int(sys.argv[4])
-    eval_m = int(sys.argv[5])
-    eval_k = int(sys.argv[6])
-    lrate = int(sys.argv[7])
+    mil_steps = 100
+    eval_n = 30
+    eval_m = 30
+    eval_k = 1
+    lrate = 100
 
     num_cpu = 8  # Number of processes to use
     # Create the vectorized environment
-    env = DummyVecEnv([make_env("symmetric-v1", i) for i in range(num_cpu)])
+    env = DummyVecEnv([make_env("symmetric-v0", i) for i in range(num_cpu)])
 
     # Stable Baselines provides you with make_vec_env() helper
     # which does exactly the previous steps for you.
     # You can choose between `DummyVecEnv` (usually faster) and `SubprocVecEnv`
     # env = make_vec_env(env_id, n_envs=num_cpu, seed=0, vec_env_cls=SubprocVecEnv)
-    layers = [layer_n for _ in range(layer_l)]
-    policy_kwargs = {
-        "net_arch": [{"vi": layers, "vf": layers}],
-        "activation_fn": nn.ReLU
-    }
-    network_type = '-'.join(list(map(str, layers)))
-    model = PPO('MlpPolicy', env, policy_kwargs=policy_kwargs, verbose=0,
+    model = PPO(SimpleACP, env, verbose=0,
                 gamma=0.99 ** (1 / eval_k), gae_lambda=0.95 ** (1 / eval_k),
                 n_steps=256 * eval_k, learning_rate=lrate * 1e-6)
 
     # model = PPO.load("./data/1mil")
     # model.set_env(env)
 
-    nid = "single-agent"
-    dire = f"./data/n8v80/lrm{lrate}/"
+    nid = "multi-agent"
 
     debug_info = ["reward", "queue", "price", "gain", "operating_cost", "wait_penalty", "overflow", "imitation_reward"]
 
     for i in range(mil_steps):
-        model.learn(total_timesteps=1_000_000)
-        model.save(dire + f"{nid}/{i + 1}")
+        model.learn(total_timesteps=1_0_000)
         accu = 0
 
         lists = {key: [] for key in debug_info}
@@ -84,11 +73,5 @@ if __name__ == "__main__":
             for k in debug_info:
                 lists[k].extend((sums[k] / eval_m).tolist())
 
-        filename = dire + f"{nid}/stats/reward.tsv"
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
         for k in debug_info:
-            with open(dire + f"{nid}/stats/{k}.tsv", 'a') as out_file:
-                tsv_writer = csv.writer(out_file, delimiter='\t')
-                tsv_writer.writerow(lists[k])
-        for k in debug_info:
-            print(f"{network_type}/{nid}/{i + 1}: {k}: ", statistics.mean(lists[k]))
+            print(f"{nid}/{i + 1}: {k}: ", statistics.mean(lists[k]))
