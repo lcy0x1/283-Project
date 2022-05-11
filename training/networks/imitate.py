@@ -60,8 +60,9 @@ class FeatureDivider(nn.Module):
         self.mini = mini
 
     def group(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+        ep = x.shape[1]
         veh = x[0:self.n]
-        mini = x[self.n:self.n * (1 + self.mini)]
+        mini = x[self.n:self.n * (1 + self.mini)].view((self.n, self.mini, ep))
         queue = [x[self.n * (1 + self.mini + i):self.n * (1 + self.mini + i + 1)].unsqueeze(0) for i in range(self.n)]
         return veh, mini, th.concat(queue)
 
@@ -144,7 +145,7 @@ class ActionNetwork(nn.Module):
     Linear mapping from queue + ReLU mapping from potential difference
     """
 
-    def __init__(self, node: int, mini: int, debug: bool = True):
+    def __init__(self, node: int, mini: int, debug: bool = False):
         super(ActionNetwork, self).__init__()
 
         self.debug = debug
@@ -201,7 +202,7 @@ class ActionNetwork(nn.Module):
     def get_price(self, x: th.Tensor):
         vehicle, mini, queue = self.divider.group(x)
         gradient, action, raw_action = self.get_action(x)
-        raw_action *= vehicle
+        raw_action = th.swapaxes(th.swapaxes(raw_action, 0, 1) * vehicle, 0, 1)
         future_gradient = self.relu(gradient - raw_action)
         departure = th.sum(raw_action, 1)  # TODO parameter
         arrival = th.sum(raw_action, 0) + th.sum(mini, 1)  # TODO parameter
@@ -227,18 +228,13 @@ class ActionNetwork(nn.Module):
             debugger.setup(x)
             for t in range(debugger.ep):
                 act = debugger.envs[t].imitation.compute_action()
-                for i in range(self.n):
-                    la = []
-                    lb = []
-                    for j in range(self.n * 2):
-                        la.append(ans[t][i * self.n * 2 + j])
-                        lb.append(act[i][j])
-                    la = np.round_(np.array(la), 3)
-                    lb = np.round_(np.array(lb), 3)
-                    # print(f'trial {t} node {i}:')
-                    # print(la)
-                    # print(lb)
-                ans[t] = th.tensor(np.array(act)).flatten()
+                trans = th.tensor(np.array(act)).flatten()
+                diff = th.sum(th.abs(ans[t] - trans)).item()
+                if diff > 10:
+                    print(f'episode {t}: ')
+                    print(diff)
+                    print(ans[t].view((8, 16)))
+                    print(trans.view((8, 16)))
         return ans
 
     def apply(self, fn):
