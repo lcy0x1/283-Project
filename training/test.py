@@ -35,7 +35,7 @@ if __name__ == "__main__":
     eval_k = 1
     lrate = 100
 
-    num_cpu = 4  # Number of processes to use
+    num_cpu = 8  # Number of processes to use
     # Create the vectorized environment
     env = DummyVecEnv([make_env("route-v1", i) for i in range(num_cpu)])
 
@@ -43,19 +43,18 @@ if __name__ == "__main__":
     # which does exactly the previous steps for you.
     # You can choose between `DummyVecEnv` (usually faster) and `SubprocVecEnv`
     # env = make_vec_env(env_id, n_envs=num_cpu, seed=0, vec_env_cls=SubprocVecEnv)
-    model = PPO(ImitateACP, env, verbose=0,
+    model = PPO(ImitateACP, env, verbose=1,
                 gamma=0.99 ** (1 / eval_k), gae_lambda=0.95 ** (1 / eval_k),
                 n_steps=256 * eval_k, learning_rate=lrate * 1e-6)
 
     # model = PPO.load("./data/1mil")
     # model.set_env(env)
 
-    nid = "multi-agent"
+    nid = "single-agent"
 
     debug_info = ["reward", "queue", "price", "gain", "operating_cost", "wait_penalty", "overflow", "imitation_reward"]
 
     for i in range(mil_steps):
-        # model.learn(total_timesteps=1_0_000)
         accu = 0
 
         lists = {key: [] for key in debug_info}
@@ -75,4 +74,6 @@ if __name__ == "__main__":
                 lists[k].extend((sums[k] / eval_m).tolist())
 
         for k in debug_info:
-            print(f"{nid}/{i + 1}: {k}: ", statistics.mean(lists[k]))
+            print(f"{nid}/{i}: {k}: ", statistics.mean(lists[k]))
+
+        model.learn(total_timesteps=1_0_000)

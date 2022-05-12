@@ -10,7 +10,7 @@
   "reward_factor": 1,
 
   "multi_agent": false,
-  "imitate": true,
+  "imitate": false,
   "average_reward": false,
   "average_queue": 30,
   "average_reset": false,
