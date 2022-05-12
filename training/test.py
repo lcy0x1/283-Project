@@ -35,7 +35,7 @@ if __name__ == "__main__":
     eval_k = 1
     lrate = 100
 
-    num_cpu = 8  # Number of processes to use
+    num_cpu = 4  # Number of processes to use
     # Create the vectorized environment
     env = DummyVecEnv([make_env("route-v1", i) for i in range(num_cpu)])
 

@@ -59,30 +59,34 @@ class FeatureDivider(nn.Module):
         self.n = n
         self.mini = mini
 
+    def all_queue(self, x: th.Tensor) -> th.Tensor:
+        ep = x.shape[0]
+        n = self.n
+        m = self.mini
+        return x[:, n * (1 + m):n * (1 + m + n)].view((ep, n, n))
+
     def group(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
-        ep = x.shape[1]
-        veh = x[0:self.n]
-        mini = x[self.n:self.n * (1 + self.mini)].view((self.n, self.mini, ep))
-        queue = [x[self.n * (1 + self.mini + i):self.n * (1 + self.mini + i + 1)].unsqueeze(0) for i in range(self.n)]
-        return veh, mini, th.concat(queue)
+        ep = x.shape[0]
+        n = self.n
+        m = self.mini
+        veh = x[:, 0:n]
+        mini = x[:, n:n * (1 + m)].view((ep, n, m))
+        return veh, mini, self.all_queue(x)
 
     def vehicles(self, index: int, x: th.Tensor) -> th.Tensor:
-        veh = x[[index]]
-        mini = x[[self.n + index * self.n + i for i in range(self.mini)]]
-        return th.concat((veh, mini))
+        veh = x[:, index:index + 1]
+        start = self.n + index * self.n
+        mini = x[:, start:start + self.mini]
+        return th.concat((veh, mini), 1)
 
     def requests(self, index: int, x: th.Tensor) -> th.Tensor:
-        return x[[self.n * (1 + self.mini) + index * self.n + i for i in range(self.n)]]
+        return self.all_queue(x)[:, index, :]
 
     def arrivals(self, index: int, x: th.Tensor) -> th.Tensor:
-        return x[[self.n * (1 + self.mini) + i * self.n + index for i in range(self.n)]]
+        return self.all_queue(x)[:, :, index]
 
     def queue(self, x: th.Tensor, i: int, j: int):
-        return x[self.n * (1 + self.mini) + i * self.n + j]
-
-
-def use_linear(p, x):
-    return th.swapaxes(p.forward(th.swapaxes(x, 0, 1)), 0, 1)
+        return self.all_queue(x)[:, i, j]
 
 
 class PotentialNetwork(nn.Module):
@@ -129,10 +133,10 @@ class PotentialNetwork(nn.Module):
         for i in range(self.n):
             res = th.concat((self.divider.vehicles(i, x),
                              self.divider.requests(i, x),
-                             self.divider.arrivals(i, x)))
-            l0.append(use_linear(self.p0[i], res))
-        x0 = th.concat(l0)
-        return use_linear(self.p1, x0)
+                             self.divider.arrivals(i, x)), 1)
+            l0.append(self.p0[i].forward(res))
+        x0 = th.concat(l0, 1)
+        return self.p1.forward(x0)
 
     def apply(self, fn):
         super(PotentialNetwork, self).apply(fn)
@@ -192,50 +196,45 @@ class ActionNetwork(nn.Module):
         raw_action = []
         for i in range(self.n):
             sub: List[Optional[th.Tensor]] = [None for _ in range(self.n)]
-            remain = x[i]
+            remain = x[:, i]
             for j in range(self.n):
                 if i == j:
                     continue
-                diff = potential[i] - potential[j]
+                diff = potential[:, i] - potential[:, j]
                 val_0 = self.relu.forward(diff) * self.distribute_param[i, j]
                 val_1 = self.divider.queue(x, i, j) * self.queue_param[i, j]
                 val: th.Tensor = val_0 + val_1
                 remain = remain - val
-                sub[j] = val.unsqueeze(0)
-            sub[i] = th.zeros(potential[0].shape).unsqueeze(0)
-            grad = th.concat(sub)
-            gradient.append(grad.unsqueeze(0))
-            sub[i] = self.relu.forward(remain).unsqueeze(0)
-            vec = th.concat(sub)
-            action.append((vec / th.sum(vec, 0)).unsqueeze(0))
-            raw_action.append((grad / th.sum(vec, 0)).unsqueeze(0))
-        return th.concat(gradient), th.concat(action), th.concat(raw_action)
+                sub[j] = val.unsqueeze(1)
+            sub[i] = th.zeros(x.shape[0]).unsqueeze(1)
+            grad = th.concat(sub, 1)
+            gradient.append(grad.unsqueeze(1))
+            sub[i] = self.relu.forward(remain).unsqueeze(1)
+            vec = th.concat(sub, 1)
+            tot = th.sum(vec, 1).unsqueeze(1)
+            action.append((vec / tot).unsqueeze(1))
+            raw_action.append((grad / tot).unsqueeze(1))
+        return th.concat(gradient, 1), th.concat(action, 1), th.concat(raw_action, 1)
 
     # TODO add parameters
     def get_price(self, x: th.Tensor):
         vehicle, mini, queue = self.divider.group(x)
         gradient, action, raw_action = self.get_action(x)
-        raw_action = th.swapaxes(th.swapaxes(raw_action, 0, 1) * vehicle, 0, 1)
+        raw_action = raw_action * vehicle.unsqueeze(2)
         future_gradient = self.relu(gradient - raw_action)
-        departure = th.sum(raw_action, 1)  # TODO parameter factor = 1
-        arrival = th.sum(raw_action, 0) + th.sum(mini, 1)  # TODO parameter factor = [1,1]
+        departure = th.sum(raw_action, 2)  # TODO parameter factor = 1
+        arrival = th.sum(raw_action, 1) + th.sum(mini, 2)  # TODO parameter factor = [1,1]
         future_vehicle = vehicle - departure + arrival
         future_queue = th.relu(queue - raw_action)
-
-        ans = []
-        intentions = th.sum(future_gradient, 1)  # TODO parameter factor = data factor
+        intentions = th.sum(future_gradient, 2)  # TODO parameter factor = data factor
         remain = self.relu(future_vehicle - intentions)
-        for i in range(self.n):
-            no_remain = remain[i] / (self.n - 1)
-            price = []
-            for j in range(self.n):
-                intention = future_gradient[i][j] + no_remain - future_queue[i][j]  # TODO parameter data factor, 1, 1
-                price.append((self.relu(1 - self.relu(intention) * 0.25 - 0.6) + 0.6).unsqueeze(0))  # TODO parameter
-            ans.append(th.concat((action[i], th.concat(price))))
-        return th.concat(ans)
+        no_remain = remain / (self.n - 1)
+        intention = future_gradient + no_remain.unsqueeze(2) - future_queue
+        price = self.relu(1 - self.relu(intention) * 0.25 - 0.6) + 0.6
+        return th.concat((action, price), 2).flatten(1)
 
     def forward(self, x: th.Tensor):
-        ans = th.swapaxes(self.get_price(th.swapaxes(x, 0, 1)), 0, 1)
+        ans = self.get_price(x)
         return ans
 
     def apply(self, fn):
