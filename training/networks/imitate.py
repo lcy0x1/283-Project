@@ -45,6 +45,8 @@ class InitParam(object):
         self.dist_factor = 0.3
         self.distribute_factor = 0.2
         self.queue_intention = 1
+        self.price_factor = 0.25
+        self.arrival_factor = 1
         self.func = nn.init.constant_
         self.env = env
 
@@ -54,8 +56,11 @@ class InitParam(object):
 
 class FeatureDivider(nn.Module):
 
-    def __init__(self, n: int, mini: int):
+    def __init__(self):
         super(FeatureDivider, self).__init__()
+
+        n = dummy_env.node
+        mini = dummy_env.mini_node_layer
         self.n = n
         self.mini = mini
 
@@ -65,15 +70,20 @@ class FeatureDivider(nn.Module):
         m = self.mini
         return x[:, n * (1 + m):n * (1 + m + n)].view((ep, n, n))
 
+    def all_vehicle(self, x: th.Tensor) -> th.Tensor:
+        ep = x.shape[0]
+        n = self.n
+        veh = x[:, 0:n]
+        return veh
+
     def group(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         ep = x.shape[0]
         n = self.n
         m = self.mini
-        veh = x[:, 0:n]
         mini = x[:, n:n * (1 + m)].view((ep, n, m))
-        return veh, mini, self.all_queue(x)
+        return self.all_vehicle(x), mini, self.all_queue(x)
 
-    def vehicles(self, index: int, x: th.Tensor) -> th.Tensor:
+    def vehicles_and_mini(self, index: int, x: th.Tensor) -> th.Tensor:
         veh = x[:, index:index + 1]
         start = self.n + index * self.n
         mini = x[:, start:start + self.mini]
@@ -96,11 +106,14 @@ class PotentialNetwork(nn.Module):
     Could be replaced with a linear layer, which has 640 parameters
     """
 
-    def __init__(self, node: int, mini: int):
+    def __init__(self):
         super(PotentialNetwork, self).__init__()
+
+        node = dummy_env.node
+        mini = dummy_env.mini_node_layer
         self.n = node
         self.mini = mini
-        self.divider = FeatureDivider(node, mini)
+        self.divider = FeatureDivider()
 
         self.p0 = [nn.Linear(1 + mini + node * 2, 1) for _ in range(node)]
         self.p1 = nn.Linear(node, node)
@@ -131,7 +144,7 @@ class PotentialNetwork(nn.Module):
     def get_potential(self, x: th.Tensor):
         l0 = []
         for i in range(self.n):
-            res = th.concat((self.divider.vehicles(i, x),
+            res = th.concat((self.divider.vehicles_and_mini(i, x),
                              self.divider.requests(i, x),
                              self.divider.arrivals(i, x)), 1)
             l0.append(self.p0[i].forward(res))
@@ -149,25 +162,33 @@ class ActionNetwork(nn.Module):
     Linear mapping from queue + ReLU mapping from potential difference
     """
 
-    def __init__(self, node: int, mini: int, debug: bool = False):
+    def __init__(self, debug: bool = False):
         super(ActionNetwork, self).__init__()
-
+        node = dummy_env.node
+        mini = dummy_env.mini_node_layer
         self.debug = debug
         self.n = node
-        self.potential = PotentialNetwork(node, mini)
-        self.divider = FeatureDivider(node, mini)
+        self.mini = mini
+        self.potential = PotentialNetwork()
+        self.divider = FeatureDivider()
         self.relu = nn.ReLU()
 
         self.distribute_param = nn.Parameter(th.empty((node, node)))
         self.queue_param = nn.Parameter(th.empty((node, node)))
+        self.departure_factor = nn.Parameter(th.empty((node, node)))
         self.arrival_factor = nn.Parameter(th.empty((node, node)))
-        self.mini_factor = nn.Parameter(th.empty((node,)))
+        self.mini_factor = nn.Parameter(th.empty((node, mini)))
+        self.intention_factor = nn.Parameter(th.empty((node, node)))
+        self.price_factor = nn.Parameter(th.empty((node, node)))
 
         self.add_module("potential", self.potential)
         self.register_parameter('distribute_param', self.distribute_param)
         self.register_parameter('queue_param', self.queue_param)
+        self.register_parameter('departure_factor', self.departure_factor)
         self.register_parameter('arrival_factor', self.arrival_factor)
         self.register_parameter('mini_factor', self.mini_factor)
+        self.register_parameter('intention_factor', self.intention_factor)
+        self.register_parameter('price_factor', self.price_factor)
 
     def init(self, param: InitParam):
         for i in range(self.n):
@@ -183,54 +204,55 @@ class ActionNetwork(nn.Module):
 
         for i in range(self.n):
             for j in range(self.n):
-                dist_fac = param.dist_factor ** param.env.edge_matrix[j][i]
+                param.init(self.departure_factor.data[i, j], 1)
+
+        for i in range(self.n):
+            for j in range(self.n):
+                dist_fac = param.arrival_factor ** param.env.edge_matrix[j][i]
                 param.init(self.arrival_factor.data[i, j], dist_fac)
 
         for i in range(self.n):
-            param.init(self.mini_factor.data[i], 1)
+            for j in range(self.mini):
+                param.init(self.mini_factor.data[i, j], 1)
+
+        for i in range(self.n):
+            for j in range(self.n):
+                param.init(self.intention_factor.data[i, j], param.data_factor)
+
+        for i in range(self.n):
+            for j in range(self.n):
+                param.init(self.price_factor.data[i, j], param.price_factor)
 
     def get_action(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         potential = self.potential.get_potential(x)
-        gradient = []
-        action = []
-        raw_action = []
-        for i in range(self.n):
-            sub: List[Optional[th.Tensor]] = [None for _ in range(self.n)]
-            remain = x[:, i]
-            for j in range(self.n):
-                if i == j:
-                    continue
-                diff = potential[:, i] - potential[:, j]
-                val_0 = self.relu.forward(diff) * self.distribute_param[i, j]
-                val_1 = self.divider.queue(x, i, j) * self.queue_param[i, j]
-                val: th.Tensor = val_0 + val_1
-                remain = remain - val
-                sub[j] = val.unsqueeze(1)
-            sub[i] = th.zeros(x.shape[0]).unsqueeze(1)
-            grad = th.concat(sub, 1)
-            gradient.append(grad.unsqueeze(1))
-            sub[i] = self.relu.forward(remain).unsqueeze(1)
-            vec = th.concat(sub, 1)
-            tot = th.sum(vec, 1).unsqueeze(1)
-            action.append((vec / tot).unsqueeze(1))
-            raw_action.append((grad / tot).unsqueeze(1))
-        return th.concat(gradient, 1), th.concat(action, 1), th.concat(raw_action, 1)
+        diff = potential.unsqueeze(2) - potential.unsqueeze(1)
+        val_0 = self.relu.forward(diff) * self.distribute_param
+        val_1 = self.divider.all_queue(x) * self.queue_param
+        grad = val_0 + val_1
+        remain = self.divider.all_vehicle(x) - th.sum(grad, 2)
+        remain = self.relu.forward(remain)
+        vec = grad[:, :, :]
+        for i in range(x.shape[0]):
+            vec[i] += th.diag(remain[i])
+        tot = self.relu(th.sum(vec, 2) - 1e-3) + 1e-3
+        action = vec / tot.unsqueeze(2)
+        raw_action = grad / tot.unsqueeze(2)
+        return grad, action, raw_action
 
-    # TODO add parameters
     def get_price(self, x: th.Tensor):
         vehicle, mini, queue = self.divider.group(x)
         gradient, action, raw_action = self.get_action(x)
         raw_action = raw_action * vehicle.unsqueeze(2)
         future_gradient = self.relu(gradient - raw_action)
-        departure = th.sum(raw_action, 2)  # TODO parameter factor = 1
-        arrival = th.sum(raw_action, 1) + th.sum(mini, 2)  # TODO parameter factor = [1,1]
+        departure = th.sum(raw_action * self.departure_factor, 2)
+        arrival = th.sum(raw_action * self.arrival_factor, 1) + th.sum(mini * self.mini_factor, 2)
         future_vehicle = vehicle - departure + arrival
         future_queue = th.relu(queue - raw_action)
-        intentions = th.sum(future_gradient, 2)  # TODO parameter factor = data factor
+        intentions = th.sum(future_gradient * self.intention_factor, 2)
         remain = self.relu(future_vehicle - intentions)
         no_remain = remain / (self.n - 1)
         intention = future_gradient + no_remain.unsqueeze(2) - future_queue
-        price = self.relu(1 - self.relu(intention) * 0.25 - 0.6) + 0.6
+        price = self.relu(1 - self.relu(intention * self.price_factor) - 0.6) + 0.6
         return th.concat((action, price), 2).flatten(1)
 
     def forward(self, x: th.Tensor):
@@ -258,7 +280,7 @@ class ImitateNetwork(nn.Module):
         self.latent_dim_vf = last_layer_dim_vf
 
         # Policy network
-        self.policy_net = ActionNetwork(env.node, env.mini_node_layer)
+        self.policy_net = ActionNetwork()
         # Value network
         self.value_net = nn.Sequential(
             nn.Linear(feature_dim, last_layer_dim_vf), nn.ReLU(),
