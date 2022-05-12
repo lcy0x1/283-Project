@@ -1,12 +1,10 @@
 from typing import Callable, Dict, List, Optional, Tuple, Type, Union
 
 import gym
-import numpy as np
 import torch as th
 from stable_baselines3.common.type_aliases import Schedule
 from torch import nn
 
-from stable_baselines3 import PPO
 from stable_baselines3.common.policies import ActorCriticPolicy
 
 from gym_route.envs.env import VehicleEnv
@@ -71,10 +69,7 @@ class FeatureDivider(nn.Module):
         return x[:, n * (1 + m):n * (1 + m + n)].view((ep, n, n))
 
     def all_vehicle(self, x: th.Tensor) -> th.Tensor:
-        ep = x.shape[0]
-        n = self.n
-        veh = x[:, 0:n]
-        return veh
+        return x[:, 0:self.n]
 
     def group(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         ep = x.shape[0]
@@ -83,20 +78,14 @@ class FeatureDivider(nn.Module):
         mini = x[:, n:n * (1 + m)].view((ep, n, m))
         return self.all_vehicle(x), mini, self.all_queue(x)
 
-    def vehicles_and_mini(self, index: int, x: th.Tensor) -> th.Tensor:
+    def potential_params(self, index: int, x: th.Tensor) -> th.Tensor:
         veh = x[:, index:index + 1]
         start = self.n + index * self.n
         mini = x[:, start:start + self.mini]
-        return th.concat((veh, mini), 1)
-
-    def requests(self, index: int, x: th.Tensor) -> th.Tensor:
-        return self.all_queue(x)[:, index, :]
-
-    def arrivals(self, index: int, x: th.Tensor) -> th.Tensor:
-        return self.all_queue(x)[:, :, index]
-
-    def queue(self, x: th.Tensor, i: int, j: int):
-        return self.all_queue(x)[:, i, j]
+        queue = self.all_queue(x)
+        req = queue[:, index, :]
+        arr = queue[:, :, index]
+        return th.concat((veh, mini, req, arr), 1)
 
 
 class PotentialNetwork(nn.Module):
@@ -144,10 +133,7 @@ class PotentialNetwork(nn.Module):
     def get_potential(self, x: th.Tensor):
         l0 = []
         for i in range(self.n):
-            res = th.concat((self.divider.vehicles_and_mini(i, x),
-                             self.divider.requests(i, x),
-                             self.divider.arrivals(i, x)), 1)
-            l0.append(self.p0[i].forward(res))
+            l0.append(self.p0[i].forward(self.divider.potential_params(i, x)))
         x0 = th.concat(l0, 1)
         return self.p1.forward(x0)
 

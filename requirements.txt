@@ -1,0 +1,4 @@
+gym~=0.21.0
+numpy~=1.22.3
+torch~=1.11.0
+setuptools~=57.0.0
