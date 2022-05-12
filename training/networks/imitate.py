@@ -81,6 +81,10 @@ class FeatureDivider(nn.Module):
         return x[self.n * (1 + self.mini) + i * self.n + j]
 
 
+def use_linear(p, x):
+    return th.swapaxes(p.forward(th.swapaxes(x, 0, 1)), 0, 1)
+
+
 class PotentialNetwork(nn.Module):
     """
     This is a linear layer, but with reduced parameters
@@ -126,13 +130,9 @@ class PotentialNetwork(nn.Module):
             res = th.concat((self.divider.vehicles(i, x),
                              self.divider.requests(i, x),
                              self.divider.arrivals(i, x)))
-            l0.append(self.use_linear(self.p0[i], res))
+            l0.append(use_linear(self.p0[i], res))
         x0 = th.concat(l0)
-        return self.use_linear(self.p1, x0)
-
-    @staticmethod
-    def use_linear(p, x):
-        return th.swapaxes(p.forward(th.swapaxes(x, 0, 1)), 0, 1)
+        return use_linear(self.p1, x0)
 
     def apply(self, fn):
         super(PotentialNetwork, self).apply(fn)
@@ -156,21 +156,34 @@ class ActionNetwork(nn.Module):
 
         self.distribute_param = nn.Parameter(th.empty((node, node)))
         self.queue_param = nn.Parameter(th.empty((node, node)))
+        self.arrival_factor = nn.Parameter(th.empty((node, node)))
+        self.mini_factor = nn.Parameter(th.empty((node,)))
 
         self.add_module("potential", self.potential)
         self.register_parameter('distribute_param', self.distribute_param)
         self.register_parameter('queue_param', self.queue_param)
+        self.register_parameter('arrival_factor', self.arrival_factor)
+        self.register_parameter('mini_factor', self.mini_factor)
 
     def init(self, param: InitParam):
         for i in range(self.n):
             for j in range(self.n):
-                value = param.dist_factor ** param.env.edge_matrix[j][i] * param.distribute_factor / self.n
+                dist_fac = param.dist_factor ** param.env.edge_matrix[j][i]
+                value = dist_fac * param.distribute_factor / self.n / param.data_factor
                 param.init(self.distribute_param.data[i, j], value)
 
         for i in range(self.n):
             for j in range(self.n):
-                value = param.queue_intention
+                value = param.queue_intention / param.data_factor
                 param.init(self.queue_param.data[i, j], value)
+
+        for i in range(self.n):
+            for j in range(self.n):
+                dist_fac = param.dist_factor ** param.env.edge_matrix[j][i]
+                param.init(self.arrival_factor.data[i, j], dist_fac)
+
+        for i in range(self.n):
+            param.init(self.mini_factor.data[i], 1)
 
     def get_action(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         potential = self.potential.get_potential(x)
@@ -204,37 +217,25 @@ class ActionNetwork(nn.Module):
         gradient, action, raw_action = self.get_action(x)
         raw_action = th.swapaxes(th.swapaxes(raw_action, 0, 1) * vehicle, 0, 1)
         future_gradient = self.relu(gradient - raw_action)
-        departure = th.sum(raw_action, 1)  # TODO parameter
-        arrival = th.sum(raw_action, 0) + th.sum(mini, 1)  # TODO parameter
+        departure = th.sum(raw_action, 1)  # TODO parameter factor = 1
+        arrival = th.sum(raw_action, 0) + th.sum(mini, 1)  # TODO parameter factor = [1,1]
         future_vehicle = vehicle - departure + arrival
         future_queue = th.relu(queue - raw_action)
 
         ans = []
-        intentions = th.sum(future_gradient, 1)  # TODO parameter
+        intentions = th.sum(future_gradient, 1)  # TODO parameter factor = data factor
         remain = self.relu(future_vehicle - intentions)
         for i in range(self.n):
             no_remain = remain[i] / (self.n - 1)
             price = []
             for j in range(self.n):
-                intention = future_gradient[i][j] + no_remain - future_queue[i][j]  # TODO parameter
+                intention = future_gradient[i][j] + no_remain - future_queue[i][j]  # TODO parameter data factor, 1, 1
                 price.append((self.relu(1 - self.relu(intention) * 0.25 - 0.6) + 0.6).unsqueeze(0))  # TODO parameter
             ans.append(th.concat((action[i], th.concat(price))))
         return th.concat(ans)
 
     def forward(self, x: th.Tensor):
         ans = th.swapaxes(self.get_price(th.swapaxes(x, 0, 1)), 0, 1)
-        if self.debug:
-            debugger = Debugger()
-            debugger.setup(x)
-            for t in range(debugger.ep):
-                act = debugger.envs[t].imitation.compute_action()
-                trans = th.tensor(np.array(act)).flatten()
-                diff = th.sum(th.abs(ans[t] - trans)).item()
-                if diff > 10:
-                    print(f'episode {t}: ')
-                    print(diff)
-                    print(ans[t].view((8, 16)))
-                    print(trans.view((8, 16)))
         return ans
 
     def apply(self, fn):
@@ -243,22 +244,14 @@ class ActionNetwork(nn.Module):
 
 
 class ImitateNetwork(nn.Module):
-    """
-    Custom network for policy and value function.
-    It receives as input the features extracted by the feature extractor.
 
-    :param feature_dim: dimension of the features extracted with the features_extractor (e.g. features from a CNN)
-    :param last_layer_dim_pi: (int) number of units for the last layer of the policy network
-    :param last_layer_dim_vf: (int) number of units for the last layer of the value network
-    """
-
-    def __init__(
-            self,
-            feature_dim: int,
-            last_layer_dim_pi: int = 128,
-            last_layer_dim_vf: int = 128,
-    ):
+    def __init__(self, feature_dim: int, env: VehicleEnv = dummy_env):
         super(ImitateNetwork, self).__init__()
+
+        assert feature_dim == env.node * (env.node + env.mini_node_layer + 1), 'feature dimension mismatch'
+        last_layer_dim_pi: int = env.node ** 2 * 2
+
+        last_layer_dim_vf: int = 64
 
         # IMPORTANT:
         # Save output dimensions, used to create the distributions
@@ -266,7 +259,7 @@ class ImitateNetwork(nn.Module):
         self.latent_dim_vf = last_layer_dim_vf
 
         # Policy network
-        self.policy_net = ActionNetwork(8, 1)
+        self.policy_net = ActionNetwork(env.node, env.mini_node_layer)
         # Value network
         self.value_net = nn.Sequential(
             nn.Linear(feature_dim, last_layer_dim_vf), nn.ReLU(),
@@ -285,6 +278,15 @@ class ImitateNetwork(nn.Module):
 
     def forward_critic(self, features: th.Tensor) -> th.Tensor:
         return self.value_net(features)
+
+
+class ForwardNet(nn.Module):
+
+    def __init__(self):
+        super(ForwardNet, self).__init__()
+
+    def forward(self, x: th.Tensor):
+        return x
 
 
 class ImitateACP(ActorCriticPolicy):
@@ -314,6 +316,4 @@ class ImitateACP(ActorCriticPolicy):
 
     def _build(self, lr_schedule: Schedule) -> None:
         super()._build(lr_schedule)
-        nn.init.constant_(self.action_net.weight.data, 0)
-        for i in range(self.mlp_extractor.latent_dim_pi):
-            nn.init.constant_(self.action_net.weight.data[i, i], 1)
+        self.action_net = ForwardNet()
