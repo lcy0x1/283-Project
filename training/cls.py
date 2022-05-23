@@ -9,7 +9,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.utils import set_random_seed
 
-from training.network_imitate import dummy_env, ImitateACP
+from network_imitate import dummy_env, ImitateACP
 
 
 def make_env(env_id, rank, seed=0):
