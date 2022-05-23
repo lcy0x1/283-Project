@@ -21,7 +21,7 @@
   "generate_skew": true,
   "custom_skew": 1,
 
-  "vfn_middle": 8,
+  "vfn_middle": 32,
   "vfn_out": 8,
 
 "edge_lengths": [
