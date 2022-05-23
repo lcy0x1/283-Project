@@ -14,6 +14,8 @@ from stable_baselines3.common.utils import set_random_seed
 import gym_route
 from torch import nn
 
+from training.networks.imitate import ImitateACP
+
 
 def make_env(env_id, rank, seed=0):
     def _init():
@@ -51,15 +53,15 @@ if __name__ == "__main__":
         "activation_fn": nn.ReLU
     }
     network_type = '-'.join(list(map(str, layers)))
-    model = PPO('MlpPolicy', env, policy_kwargs=policy_kwargs, verbose=0,
+    model = PPO(ImitateACP, env, policy_kwargs=policy_kwargs, verbose=0,
                 gamma=0.99 ** (1 / eval_k), gae_lambda=0.95 ** (1 / eval_k),
                 n_steps=256 * eval_k, learning_rate=lrate * 1e-6)
 
     # model = PPO.load("./data/1mil")
     # model.set_env(env)
 
-    nid = "single-agent"
-    dire = f"./data/n8v80sk0/128x2-lrm{lrate}/"
+    nid = "imitate-agent"
+    dire = f"./data/n8v80sk100/8-2-lrm{lrate}/"
 
     debug_info = ["reward", "queue", "price", "gain", "operating_cost", "wait_penalty", "overflow", "imitation_reward"]
 

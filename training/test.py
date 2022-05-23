@@ -43,7 +43,7 @@ if __name__ == "__main__":
     # which does exactly the previous steps for you.
     # You can choose between `DummyVecEnv` (usually faster) and `SubprocVecEnv`
     # env = make_vec_env(env_id, n_envs=num_cpu, seed=0, vec_env_cls=SubprocVecEnv)
-    model = PPO(ImitateACP, env, verbose=1,
+    model = PPO(ImitateACP, env, verbose=0,
                 gamma=0.99 ** (1 / eval_k), gae_lambda=0.95 ** (1 / eval_k),
                 n_steps=256 * eval_k, learning_rate=lrate * 1e-6)
 
@@ -77,3 +77,5 @@ if __name__ == "__main__":
             print(f"{nid}/{i}: {k}: ", statistics.mean(lists[k]))
 
         model.learn(total_timesteps=1_0_000)
+
+        print(f"{nid}/{i}: value_loss: ", model.logger.name_to_value["train/value_loss"])

@@ -62,6 +62,8 @@ class FeatureDivider(nn.Module):
         self.n = n
         self.mini = mini
 
+        self.potential_param_count = 1 + mini + n * 2
+
     def all_queue(self, x: th.Tensor) -> th.Tensor:
         ep = x.shape[0]
         n = self.n
@@ -82,6 +84,16 @@ class FeatureDivider(nn.Module):
         veh = x[:, index:index + 1]
         start = self.n + index * self.n
         mini = x[:, start:start + self.mini]
+        queue = self.all_queue(x)
+        req = queue[:, index, :]
+        arr = queue[:, :, index]
+        return th.concat((veh, mini, req, arr), 1)
+
+    def value_params(self, index: int, x: th.Tensor) -> th.Tensor:
+        n = self.n
+        m = self.mini
+        veh = x[:, 0:n]
+        mini = x[:, n:n * (1 + m)]
         queue = self.all_queue(x)
         req = queue[:, index, :]
         arr = queue[:, :, index]
@@ -250,28 +262,44 @@ class ActionNetwork(nn.Module):
         self.init(InitParam())
 
 
+class ValueNetwork(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        middle = dummy_env.config["vfn_middle"]
+        m = dummy_env.config["vfn_out"]
+        self.n = dummy_env.node
+        self.divider = FeatureDivider()
+        self.output_size = self.n * m
+        self.nets = [nn.Sequential(nn.Linear(self.divider.potential_param_count, middle),
+                                   nn.ReLU(), nn.Linear(middle, m), nn.ReLU())
+                     for _ in range(self.n)]
+        for i in range(self.n):
+            self.add_module("net_" + str(i), self.nets[i])
+
+    def forward(self, x: th.Tensor):
+        results: List[Optional[th.Tensor]] = [None for _ in range(self.n)]
+        for i in range(self.n):
+            results[i] = self.nets[i].forward(self.divider.potential_params(i, x))
+        return th.concat(results, 1)
+
+
 class ImitateNetwork(nn.Module):
 
     def __init__(self, feature_dim: int, env: VehicleEnv = dummy_env):
         super(ImitateNetwork, self).__init__()
 
         assert feature_dim == env.node * (env.node + env.mini_node_layer + 1), 'feature dimension mismatch'
-        last_layer_dim_pi: int = env.node ** 2 * 2
-
-        last_layer_dim_vf: int = 64
-
-        # IMPORTANT:
-        # Save output dimensions, used to create the distributions
-        self.latent_dim_pi = last_layer_dim_pi
-        self.latent_dim_vf = last_layer_dim_vf
 
         # Policy network
         self.policy_net = ActionNetwork()
         # Value network
-        self.value_net = nn.Sequential(
-            nn.Linear(feature_dim, last_layer_dim_vf), nn.ReLU(),
-            nn.Linear(last_layer_dim_vf, last_layer_dim_vf), nn.ReLU()
-        )
+        self.value_net = ValueNetwork()
+
+        # IMPORTANT:
+        # Save output dimensions, used to create the distributions
+        self.latent_dim_pi = env.node ** 2 * 2
+        self.latent_dim_vf = self.value_net.output_size
 
     def forward(self, features: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
         """
@@ -293,6 +321,7 @@ class ForwardNet(nn.Module):
         super(ForwardNet, self).__init__()
 
     def forward(self, x: th.Tensor):
+        # x = x.detach()
         return x
 
 
@@ -324,3 +353,4 @@ class ImitateACP(ActorCriticPolicy):
     def _build(self, lr_schedule: Schedule) -> None:
         super()._build(lr_schedule)
         self.action_net = ForwardNet()
+        # nn.init.constant_(self.log_std.data, -10)
