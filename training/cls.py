@@ -1,20 +1,15 @@
 import csv
-import json
 import os
 import statistics
 import sys
 
 import gym
 import numpy as np
-import pkg_resources
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
-from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.utils import set_random_seed
-import gym_route
-from torch import nn
 
-from training.networks.imitate import dummy_env, ImitateACP
+from training.network_imitate import dummy_env, ImitateACP
 
 
 def make_env(env_id, rank, seed=0):
