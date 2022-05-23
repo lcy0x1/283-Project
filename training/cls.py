@@ -14,7 +14,7 @@ from stable_baselines3.common.utils import set_random_seed
 import gym_route
 from torch import nn
 
-from training.networks.imitate import ImitateACP
+from training.networks.imitate import dummy_env, ImitateACP
 
 
 def make_env(env_id, rank, seed=0):
@@ -31,13 +31,10 @@ def make_env(env_id, rank, seed=0):
 
 
 if __name__ == "__main__":
-    layer_n = int(sys.argv[1])
-    layer_l = int(sys.argv[2])
-    mil_steps = int(sys.argv[3])
-    eval_n = int(sys.argv[4])
-    eval_m = int(sys.argv[5])
-    eval_k = int(sys.argv[6])
-    lrate = int(sys.argv[7])
+    mil_steps = int(sys.argv[1])
+    eval_n = int(sys.argv[2])
+    eval_m = int(sys.argv[3])
+    lrate = int(sys.argv[4])
 
     num_cpu = 8  # Number of processes to use
     # Create the vectorized environment
@@ -47,21 +44,17 @@ if __name__ == "__main__":
     # which does exactly the previous steps for you.
     # You can choose between `DummyVecEnv` (usually faster) and `SubprocVecEnv`
     # env = make_vec_env(env_id, n_envs=num_cpu, seed=0, vec_env_cls=SubprocVecEnv)
-    layers = [layer_n for _ in range(layer_l)]
-    policy_kwargs = {
-        "net_arch": [{"vi": layers, "vf": layers}],
-        "activation_fn": nn.ReLU
-    }
-    network_type = '-'.join(list(map(str, layers)))
-    model = PPO(ImitateACP, env, policy_kwargs=policy_kwargs, verbose=0,
-                gamma=0.99 ** (1 / eval_k), gae_lambda=0.95 ** (1 / eval_k),
-                n_steps=256 * eval_k, learning_rate=lrate * 1e-6)
+    model = PPO(ImitateACP, env, verbose=0,
+                gamma=0.99, gae_lambda=0.95,
+                n_steps=256, learning_rate=lrate * 1e-6)
 
     # model = PPO.load("./data/1mil")
     # model.set_env(env)
 
     nid = "imitate-agent"
-    dire = f"./data/n8v80sk100/8-2-lrm{lrate}/"
+    vfn_middle = dummy_env.config["vfn_middle"]
+    vfn_m = dummy_env.config["vfn_out"]
+    dire = f"./data/n8v80sk100/{vfn_middle}-{vfn_m}-lrm{lrate}/"
 
     debug_info = ["reward", "queue", "price", "gain", "operating_cost", "wait_penalty", "overflow", "imitation_reward"]
 
@@ -76,13 +69,12 @@ if __name__ == "__main__":
             sums = {key: np.zeros((num_cpu,)) for key in debug_info}
             j = 0
             obs = env.reset()
-            for _ in range(eval_m * eval_k):
+            for _ in range(eval_m):
                 j += 1
                 action, _states = model.predict(obs)
                 obs, rewards, dones, info = env.step(action)
-                if j % eval_k == 0:
-                    for k in debug_info:
-                        sums[k] += np.array(([v[k] for v in info]))
+                for k in debug_info:
+                    sums[k] += np.array(([v[k] for v in info]))
             for k in debug_info:
                 lists[k].extend((sums[k] / eval_m).tolist())
 
@@ -93,4 +85,4 @@ if __name__ == "__main__":
                 tsv_writer = csv.writer(out_file, delimiter='\t')
                 tsv_writer.writerow(lists[k])
         for k in debug_info:
-            print(f"{network_type}/{nid}/{i + 1}: {k}: ", statistics.mean(lists[k]))
+            print(f"{nid}/{i + 1}: {k}: ", statistics.mean(lists[k]))
