@@ -62,7 +62,7 @@ class FeatureDivider(nn.Module):
         self.n = n
         self.mini = mini
 
-        self.potential_param_count = 1 + mini + n * 2
+        self.value_param_count = n * (4 + mini)
 
     def all_queue(self, x: th.Tensor) -> th.Tensor:
         ep = x.shape[0]
@@ -95,9 +95,10 @@ class FeatureDivider(nn.Module):
         veh = x[:, 0:n]
         mini = x[:, n:n * (1 + m)]
         queue = self.all_queue(x)
+        sums = th.sum(queue, 2)
         req = queue[:, index, :]
         arr = queue[:, :, index]
-        return th.concat((veh, mini, req, arr), 1)
+        return th.concat((veh, mini, req, arr, sums), 1)
 
 
 class PotentialNetwork(nn.Module):
@@ -271,7 +272,7 @@ class ValueNetwork(nn.Module):
         self.n = dummy_env.node
         self.divider = FeatureDivider()
         self.output_size = self.n * m
-        self.nets = [nn.Sequential(nn.Linear(self.divider.potential_param_count, middle),
+        self.nets = [nn.Sequential(nn.Linear(self.divider.value_param_count, middle),
                                    nn.ReLU(), nn.Linear(middle, m), nn.ReLU())
                      for _ in range(self.n)]
         for i in range(self.n):
@@ -280,7 +281,7 @@ class ValueNetwork(nn.Module):
     def forward(self, x: th.Tensor):
         results: List[Optional[th.Tensor]] = [None for _ in range(self.n)]
         for i in range(self.n):
-            results[i] = self.nets[i].forward(self.divider.potential_params(i, x))
+            results[i] = self.nets[i].forward(self.divider.value_params(i, x))
         return th.concat(results, 1)
 
 
