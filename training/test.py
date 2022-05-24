@@ -67,6 +67,8 @@ if __name__ == "__main__":
         for k in debug_info:
             print(f"{nid}/{i}: {k}: ", statistics.mean(lists[k]))
 
+        acp: ImitateACP = model.policy
+
         model.learn(total_timesteps=1_0_000)
 
         print(f"{nid}/{i}: value_loss: ", model.logger.name_to_value["train/value_loss"])

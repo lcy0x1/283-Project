@@ -347,6 +347,11 @@ class ImitateACP(ActorCriticPolicy):
             **kwargs,
         )
 
+    def re_init(self):
+        param = InitParam()
+        self.mlp_extractor.policy_net.init(param)
+        self.mlp_extractor.policy_net.potential.init(param)
+
     def _build_mlp_extractor(self) -> None:
         self.mlp_extractor = ImitateNetwork(self.features_dim)
 

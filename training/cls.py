@@ -54,7 +54,7 @@ if __name__ == "__main__":
     debug_info = ["reward", "queue", "price", "gain", "operating_cost", "wait_penalty", "overflow", "imitation_reward"]
 
     for i in range(mil_steps):
-        model.learn(total_timesteps=1_000_000)
+        model.learn(total_timesteps=100_000)
         model.save(dire + f"{nid}/{i + 1}")
         accu = 0
 
@@ -72,7 +72,9 @@ if __name__ == "__main__":
                     sums[k] += np.array(([v[k] for v in info]))
             for k in debug_info:
                 lists[k].extend((sums[k] / eval_m).tolist())
-
+        if statistics.mean(lists["reward"]) < 0:
+            acp: ImitateACP = model.policy
+            acp.re_init()
         filename = dire + f"{nid}/stats/reward.tsv"
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         for k in debug_info:
