@@ -56,7 +56,7 @@ if __name__ == "__main__":
             obs = env.reset()
             for _ in range(eval_m * eval_k):
                 j += 1
-                action, _states = model.predict(obs, deterministic=False)
+                action, _states = model.predict(obs, deterministic=True)
                 obs, rewards, dones, info = env.step(action)
                 if j % eval_k == 0:
                     for k in debug_info:
@@ -68,6 +68,7 @@ if __name__ == "__main__":
             print(f"{nid}/{i}: {k}: ", statistics.mean(lists[k]))
 
         acp: ImitateACP = model.policy
+        acp.re_init()
 
         model.learn(total_timesteps=1_0_000)
 

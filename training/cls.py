@@ -49,7 +49,7 @@ if __name__ == "__main__":
     nid = "imitate-agent"
     vfn_middle = dummy_env.config["vfn_middle"]
     vfn_m = dummy_env.config["vfn_out"]
-    dire = f"./data/n8v80sk100/sp0-{vfn_middle}-{vfn_m}-lrm{lrate}/"
+    dire = f"./data/n8v80sk100/sp1-{vfn_middle}-{vfn_m}-lrm{lrate}/"
 
     debug_info = ["reward", "queue", "price", "gain", "operating_cost", "wait_penalty", "overflow", "imitation_reward"]
 
