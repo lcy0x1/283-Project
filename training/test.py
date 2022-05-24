@@ -56,7 +56,7 @@ if __name__ == "__main__":
             obs = env.reset()
             for _ in range(eval_m * eval_k):
                 j += 1
-                action, _states = model.predict(obs, deterministic=True)
+                action, _states = model.predict(obs, deterministic=False)
                 obs, rewards, dones, info = env.step(action)
                 if j % eval_k == 0:
                     for k in debug_info:
