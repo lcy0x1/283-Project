@@ -30,6 +30,7 @@ if __name__ == "__main__":
     eval_n = int(sys.argv[2])
     eval_m = int(sys.argv[3])
     lrate = int(sys.argv[4])
+    device = sys.argv[5]
 
     num_cpu = 8  # Number of processes to use
     # Create the vectorized environment
@@ -41,7 +42,7 @@ if __name__ == "__main__":
     # env = make_vec_env(env_id, n_envs=num_cpu, seed=0, vec_env_cls=SubprocVecEnv)
     model = PPO(ImitateACP, env, verbose=0,
                 gamma=0.99, gae_lambda=0.95,
-                n_steps=256, learning_rate=lrate * 1e-6, device='cuda:1')
+                n_steps=256, learning_rate=lrate * 1e-6, device=device)
 
     # model = PPO.load("./data/1mil")
     # model.set_env(env)
