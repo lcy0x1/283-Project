@@ -23,4 +23,5 @@ for cycle in range(n):
 mean = cumulative_reward / n
 var = cumulative_square / n - mean ** 2
 print("mean: ", mean, "stdev: ", math.sqrt(var / n))
+print("per vehicle mean: ", mean / env.vehicle, "stdev: ", math.sqrt(var / n) / env.vehicle)
 print("average price", average_price / n)

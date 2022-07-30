@@ -113,8 +113,8 @@ class VehicleEnv(gym.Env):
         self.custom_edge = self.config["custom_edge"]
         self.generate_skew = self.config["generate_skew"]
         self.custom_skew = self.config["custom_skew"]
-        self.edge_list = self.config["edge_lengths"]
         if self.custom_edge:
+            self.edge_list = self.config["edge_lengths"]
             self.demand_list = self.config["demand_factor"]
             self.price_list = self.config["price_factor"]
             self.fill_edge_matrix()
@@ -182,6 +182,16 @@ class VehicleEnv(gym.Env):
                     sys.exit()
 
     def create_matrix(self):
+        if self.config["grid_network"]:
+            size = self.config["grid_size"]
+            self.edge_list = []
+            for x0 in range(size):
+                for y0 in range(size):
+                    for x1 in range(size):
+                        for y1 in range(size):
+                            self.edge_list.append(abs(x1 - x0) + abs(y1 - y0))
+        else:
+            self.edge_list = self.config["edge_lengths"]
         tmp = 0
         for i in range(self.node):
             for j in range(self.node):
@@ -191,12 +201,29 @@ class VehicleEnv(gym.Env):
                 self.demand_factor[i][j] = -self.edge_list[tmp] ** 2
                 tmp += 1
 
-                if self.generate_skew:
-                    if i > j:
-                        factor = self.custom_skew
-                    else:
-                        factor = 1 / self.custom_skew
-                    self.demand_factor[i][j] *= factor
+        if self.generate_skew:
+            if self.config["grid_network"]:
+                size = self.config["grid_size"]
+                for x0 in range(size):
+                    for y0 in range(size):
+                        for x1 in range(size):
+                            for y1 in range(size):
+                                i = x0 + y0
+                                j = x1 + y1
+                                factor = 1
+                                if i > j:
+                                    factor = self.custom_skew
+                                elif i < j:
+                                    factor = 1 / self.custom_skew
+                                self.demand_factor[i][j] *= factor
+            else:
+                for i in range(self.node):
+                    for j in range(self.node):
+                        if i > j:
+                            factor = self.custom_skew
+                        else:
+                            factor = 1 / self.custom_skew
+                        self.demand_factor[i][j] *= factor
 
     def step(self, act):
         if self.multi_agent:
@@ -229,6 +256,8 @@ class VehicleEnv(gym.Env):
         wait_pen = 0
         overf = 0
         rew = 0
+        reb = 0
+        serve = 0
 
         stats_queue = 0
         stats_price = 0
@@ -268,9 +297,15 @@ class VehicleEnv(gym.Env):
                     # Cars arriving at node j (for length 1 case)
                     self.vehicles[j] += veh_motion
                 self.vehicles[i] -= veh_motion
-                self.queue[i][j] = max(0, self.queue[i][j] - veh_motion)
+                moved_customer = min(self.queue[i][j], veh_motion)
+                self.queue[i][j] = self.queue[i][j] - moved_customer
                 edge_len = self.edge_matrix[i][j]
+
+                # statistics
+                serve += edge_len * moved_customer
                 op_cost += veh_motion * self.operating_cost * edge_len
+                reb += (veh_motion - moved_customer) * self.operating_cost * edge_len
+
                 price = self.action_cache[i].price[j]
                 price_fac = self.price_factor[i][j]
                 demand_fac = self.demand_factor[i][j]
@@ -295,7 +330,8 @@ class VehicleEnv(gym.Env):
             current_reward = difference
         debug_info = {'gain': rew, 'operating_cost': op_cost, 'wait_penalty': wait_pen, 'overflow': overf,
                       'reward': reward, 'price': stats_price / self.node / (self.node - 1),
-                      'queue': stats_queue / self.node / (self.node - 1), 'imitation_reward': difference}
+                      'queue': stats_queue / self.node / (self.node - 1), 'imitation_reward': difference,
+                      'rebalancing_cost': reb, 'distance_served': serve}
         return current_reward, debug_info
 
     def calculate_imitation_reward(self):

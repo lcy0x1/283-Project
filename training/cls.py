@@ -41,7 +41,7 @@ if __name__ == "__main__":
     # env = make_vec_env(env_id, n_envs=num_cpu, seed=0, vec_env_cls=SubprocVecEnv)
     model = PPO(ImitateACP, env, verbose=0,
                 gamma=0.99, gae_lambda=0.95,
-                n_steps=256, learning_rate=lrate * 1e-6)
+                n_steps=256, learning_rate=lrate * 1e-6, device='cuda:1')
 
     # model = PPO.load("./data/1mil")
     # model.set_env(env)
@@ -49,11 +49,12 @@ if __name__ == "__main__":
     nid = "imitate-agent"
     vfn_middle = dummy_env.config["vfn_middle"]
     vfn_m = dummy_env.config["vfn_out"]
-    dire = f"./data/n8v80sk100/sp1-{vfn_middle}-{vfn_m}-lrm{lrate}/"
+    dire = f"/mldata/chengyilin/n49v4000skew08/sp1-{vfn_middle}-{vfn_m}-lrm{lrate}/"
 
-    debug_info = ["reward", "queue", "price", "gain", "operating_cost", "wait_penalty", "overflow", "imitation_reward"]
+    debug_info = ["reward", "queue", "price", "gain", "operating_cost", "wait_penalty", "overflow", "imitation_reward",
+                  "rebalancing_cost", "distance_served"]
 
-    do_reset = True
+    do_reset = False
 
     for i in range(mil_steps):
         if do_reset:

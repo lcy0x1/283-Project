@@ -1,14 +1,14 @@
 {
-  "node": 8,
-  "vehicle": 80,
+  "node": 49,
+  "vehicle": 4000,
   "max_queue": 30,
   "poisson_param": 5,
   "operation_cost": 0.1,
   "waiting_penalty": 0.2,
   "overflow": 10,
   "poisson_cap": 5,
-  "reward_factor": 1,
 
+  "reward_factor": 1,
   "multi_agent": false,
   "imitate": false,
   "average_reward": false,
@@ -19,19 +19,9 @@
   "custom_edge": false,
   "skip_second_gradient": true,
   "generate_skew": true,
-  "custom_skew": 1,
-
-  "vfn_middle": 64,
-  "vfn_out": 32,
-
-"edge_lengths": [
-        0,1,2,3,1,2,3,4,
-        1,0,1,2,2,1,2,3,
-        2,1,0,1,3,2,1,2,
-        3,2,1,0,4,3,2,1,
-        1,2,3,4,0,1,2,3,
-        2,1,2,3,1,0,1,2,
-        3,2,1,2,2,1,0,1,
-        4,3,2,1,3,2,1,0
-      ]
+  "custom_skew": 0.8,
+  "vfn_middle": 16,
+  "vfn_out": 4,
+  "grid_network": true,
+  "grid_size": 7
 }

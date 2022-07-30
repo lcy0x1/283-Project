@@ -11,7 +11,7 @@ class Imitated:
         self.dist_factor = 0.3
         self.queue_factor = 0.4
         self.queue_intention = 1
-        self.distribute_factor = 0.4
+        self.distribute_factor = 20
         self.price_intention = 0.25
 
         self.operating_cost = 0.6
